@@ -212,12 +212,12 @@ while cap.isOpened():
             eye_l_3d = R @ EYE_LEFT_HEAD  + t_head
 
             eye_r_screen = np.array([
-                eye_r_3d[0],
+                -eye_r_3d[0],
                 CAMERA_TO_SCREEN_CENTER_Y_MM - eye_r_3d[1],
                 eye_r_3d[2]
             ])
             eye_l_screen = np.array([
-                eye_l_3d[0],
+                -eye_l_3d[0],
                 CAMERA_TO_SCREEN_CENTER_Y_MM - eye_l_3d[1],
                 eye_l_3d[2]
             ])
@@ -226,7 +226,7 @@ while cap.isOpened():
             eye_base_3d = eye_r_screen - eye_l_screen
 
             cam_forward = -R[:, 2]
-            face_normal_screen = np.array([cam_forward[0], -cam_forward[1], cam_forward[2]])
+            face_normal_screen = np.array([-cam_forward[0], -cam_forward[1], cam_forward[2]])
 
             delta_eye_y = eye_r_screen[1] - eye_l_screen[1]
             abs_tilt_y = abs(delta_eye_y)
