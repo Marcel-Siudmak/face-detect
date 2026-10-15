@@ -4,6 +4,7 @@ import mediapipe as mp
 import numpy as np
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from head_tracker_udp import HeadTrackerUDPClient
 
 # Model antropometryczny twarzy 3D w mm
 LANDMARKS_DICT = {
@@ -58,6 +59,8 @@ POS_SMOOTH_RATE   = 14.0    # Szybkość wygładzania drgań pozycji 3D z PnP
 
 y_neutral_mm = CAMERA_TO_SCREEN_CENTER_Y_MM
 
+udp_client = HeadTrackerUDPClient(host="127.0.0.1", port=4242)
+
 base_options = python.BaseOptions(model_asset_path='face_landmarker.task')
 options = vision.FaceLandmarkerOptions(
     base_options=base_options,
@@ -66,9 +69,24 @@ options = vision.FaceLandmarkerOptions(
 )
 detector = vision.FaceLandmarker.create_from_options(options)
 
-cap = cv2.VideoCapture(1, cv2.CAP_AVFOUNDATION)
+# Inicjalizacja kamery: automatyczny wybór dostępnego indeksu (0 lub 1)
+cap = None
+for cam_idx in [0, 1]:
+    temp_cap = cv2.VideoCapture(cam_idx, cv2.CAP_AVFOUNDATION)
+    if temp_cap.isOpened():
+        ret, _ = temp_cap.read()
+        if ret:
+            cap = temp_cap
+            print(f"[+] Camera initialized successfully on index {cam_idx}")
+            break
+        temp_cap.release()
+
+if cap is None:
+    raise RuntimeError("Nie znaleziono działającej kamery! Sprawdź uprawnienia do kamery w macOS.")
+
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
 
 
 def smoothstep(edge0, edge1, x):
@@ -291,12 +309,52 @@ while cap.isOpened():
             draw_hud(frame, eye_l_screen, eye_r_screen, cam_smooth,
                      face_normal_screen, alpha_smooth, mode_str, y_rel, delta_eye_y)
 
+            # Obliczenie kątów głowy:
+            # 1. Roll (przechył ucha do ramienia)
+            delta_eye_x = eye_r_screen[0] - eye_l_screen[0]
+            roll_deg = float(np.degrees(np.arctan2(delta_eye_y, delta_eye_x)))
+
+            # 2. Yaw (skręt głowy w lewo / prawo)
+            # face_normal_screen: +X w prawo, +Z w stronę użytkownika
+            yaw_deg = float(np.degrees(np.arctan2(face_normal_screen[0], face_normal_screen[2])))
+
+            # 3. Pitch (unoszenie / opuszczanie brody: góra / dół)
+            # face_normal_screen: +Y w górę, +Z w stronę użytkownika
+            pitch_deg = float(np.degrees(np.arctan2(face_normal_screen[1], face_normal_screen[2])))
+
+            # Wysłanie pozycji kamery/oczu (cam_smooth) oraz rotacji głowy przez UDP
+            udp_client.send_pose(
+                x_mm=float(cam_smooth[0]),
+                y_mm=float(cam_smooth[1]),
+                z_mm=float(cam_smooth[2]),
+                yaw=yaw_deg,
+                pitch=pitch_deg,
+                roll=roll_deg,
+                is_valid=True,
+            )
+
             t_r   = f"Prawe: X:{eye_r_screen[0]:4.0f} Y:{eye_r_screen[1]:4.0f} Z:{eye_r_screen[2]:4.0f}"
             t_l   = f"Lewe : X:{eye_l_screen[0]:4.0f} Y:{eye_l_screen[1]:4.0f} Z:{eye_l_screen[2]:4.0f}"
             t_cam = f"KAMERA: X:{cam_smooth[0]:4.0f} Y:{cam_smooth[1]:4.0f} Z:{cam_smooth[2]:4.0f} (a:{alpha_smooth:+0.2f})"
             cv2.putText(frame, t_r,   (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             cv2.putText(frame, t_l,   (30, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
             cv2.putText(frame, t_cam, (30, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 140, 255), 2)
+        else:
+            udp_client.send_pose(is_valid=False)
+    else:
+        udp_client.send_pose(is_valid=False)
+
+    # Wskaźnik nadawania UDP na klatce wideo
+    cv2.putText(
+        frame,
+        f"UDP: {udp_client.host}:{udp_client.port}",
+        (30, h - 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (0, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
 
     cv2.imshow("Tracking 3D - Peeking Biomechanics", frame)
     key = cv2.waitKey(1) & 0xFF
@@ -305,7 +363,9 @@ while cap.isOpened():
     elif key == ord('c') and 'head_center' in locals():
         y_neutral_mm = head_center[1]
 
+udp_client.close()
 detector.close()
 cap.release()
 cv2.destroyAllWindows()
+
 
