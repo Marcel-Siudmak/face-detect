@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "headtracker",
+  "version": "${version}",
+  "name": "HeadTracker 6DoF",
+  "description": "6-DoF Head Tracking and Off-Axis Perspective Projection for Minecraft.",
+  "authors": [
+    "Marcel"
+  ],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.facecam.headtracker.HeadTrackerMod"
+    ]
+  },
+  "mixins": [
+    "headtracker.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.0",
+    "fabric-api": "*",
+    "minecraft": "~26.3",
+    "java": ">=25"
+  }
+}
