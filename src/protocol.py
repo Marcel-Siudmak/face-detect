@@ -1,6 +1,6 @@
 import socket
 import struct
-from typing import Tuple
+from typing import Optional, Tuple
 
 MAGIC_HEADER = b"FACE"
 PACKET_FORMAT = "<4sffffffi"
@@ -69,10 +69,7 @@ class HeadTrackerUDPClient:
         is_valid: bool = True,
         flags: int = 0,
     ) -> bool:
-        """Encodes and sends pose packet via non-blocking UDP.
-
-        Returns True if sent successfully, False otherwise.
-        """
+        """Encodes and sends pose packet via non-blocking UDP."""
         try:
             packet = pack_pose(
                 x_mm=x_mm,
@@ -87,11 +84,59 @@ class HeadTrackerUDPClient:
             self.sock.sendto(packet, self.dest_addr)
             return True
         except Exception:
-            # Safe non-blocking send; network issues shouldn't interrupt main detection loop
             return False
 
     def close(self):
         """Closes the underlying UDP socket."""
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+
+
+class HeadTrackerUDPReceiver:
+    """Non-blocking UDP receiver for head tracking poses."""
+
+    def __init__(self, host: str = "127.0.0.1", port: int = 4242):
+        self.host = host
+        self.port = port
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind((host, port))
+        self.sock.setblocking(False)
+
+    def receive_latest_pose(self) -> Optional[dict]:
+        """Drains the UDP buffer and returns the most recent pose packet received, or None."""
+        latest_data = None
+        while True:
+            try:
+                data, _ = self.sock.recvfrom(PACKET_SIZE * 4)
+                if len(data) == PACKET_SIZE:
+                    latest_data = data
+            except BlockingIOError:
+                break
+            except Exception:
+                break
+
+        if latest_data is None:
+            return None
+
+        magic, x, y, z, yaw, pitch, roll, flags = unpack_pose(latest_data)
+        if magic != MAGIC_HEADER:
+            return None
+
+        return {
+            "x_mm": x,
+            "y_mm": y,
+            "z_mm": z,
+            "yaw": yaw,
+            "pitch": pitch,
+            "roll": roll,
+            "is_valid": bool(flags & 1),
+            "flags": flags,
+        }
+
+    def close(self):
+        """Closes the receiver UDP socket."""
         try:
             self.sock.close()
         except Exception:
