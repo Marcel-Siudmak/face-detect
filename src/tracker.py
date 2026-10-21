@@ -10,13 +10,12 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 from src.config import (
+    INTENT_POS_X_EXP,
+    INTENT_POS_Y_EXP,
     ALPHA_SMOOTH_RATE,
     CAMERA_DISTORTION_D,
     CAMERA_INTRINSIC_K,
     CAMERA_TO_SCREEN_CENTER_Y_MM,
-    DEADZONE_ANGLE_SIN,
-    DEADZONE_X_MM,
-    DEADZONE_Y_MM,
     DEFAULT_MODEL_PATH,
     EYE_LEFT_HEAD,
     EYE_RIGHT_HEAD,
@@ -90,9 +89,27 @@ class FaceTracker:
         # Stan filtrów wygładzających
         self.cam_smooth: Optional[np.ndarray] = None
         self.alpha_smooth: float = 0.0
-        self.y_neutral_mm: float = CAMERA_TO_SCREEN_CENTER_Y_MM
+        self.y_neutral_mm: float = 0.0  # Stały punkt odniesienia (środek)
         self.prev_time: Optional[float] = None
         self.last_head_center: Optional[np.ndarray] = None
+
+        # Flagi diagnostyczne intencji
+        self.enable_horizontal_intent: bool = True  # Pkt 4 i 5 (Zaułek X/Yaw)
+        self.enable_vertical_intent: bool = True    # Pkt 6 (Murek/Daszek Y/Roll)
+
+    def toggle_horizontal_intent(self) -> bool:
+        """Przełącza intencję poziomą (zaułek: translacja X + rotacja Yaw)."""
+        self.enable_horizontal_intent = not self.enable_horizontal_intent
+        state_str = "WŁĄCZONA" if self.enable_horizontal_intent else "WYŁĄCZONA"
+        print(f"[*] Intencja pozioma (Pkt 4 i 5): {state_str}")
+        return self.enable_horizontal_intent
+
+    def toggle_vertical_intent(self) -> bool:
+        """Przełącza intencję pionową (przechył Z Roll + translacja Y)."""
+        self.enable_vertical_intent = not self.enable_vertical_intent
+        state_str = "WŁĄCZONA" if self.enable_vertical_intent else "WYŁĄCZONA"
+        print(f"[*] Intencja pionowa (Pkt 6): {state_str}")
+        return self.enable_vertical_intent
 
     def calibrate_neutral_y(self) -> None:
         """Ustawia aktualną wysokość głowy jako poziom neutralny."""
@@ -176,44 +193,62 @@ class FaceTracker:
         face_normal_screen = np.array([-cam_forward[0], -cam_forward[1], cam_forward[2]])
 
         delta_eye_y = eye_r_screen[1] - eye_l_screen[1]
-        abs_tilt_y = abs(delta_eye_y)
-        y_rel = head_center[1] - self.y_neutral_mm
 
-        # --- 1. INTENCJA POZIOMA (ZAUŁEK) ---
-        abs_x = abs(head_center[0])
-        factor_pos_x = smoothstep(DEADZONE_X_MM, MAX_DIST_X_MM, abs_x)
-        sign_pos_x = np.sign(head_center[0]) if abs_x > 1e-3 else 0.0
-        opposing_rot_x = -sign_pos_x * face_normal_screen[0]
-        factor_rot_x = smoothstep(DEADZONE_ANGLE_SIN, MAX_ANGLE_SIN, opposing_rot_x)
+        # --- 1. INTENCJA POZIOMA (Pkt 4 i 5: Zaułek X/Yaw) ---
+        target_alpha_x = 0.0
+        intent_x_mag = 0.0
+        if self.enable_horizontal_intent:
+            abs_x = abs(head_center[0])
+            # Nieliniowa translacja (progresywna potęga)
+            t_pos_x = float(np.clip(abs_x / MAX_DIST_X_MM, 0.0, 1.0))
+            factor_pos_x = t_pos_x ** INTENT_POS_X_EXP
 
-        intent_x = factor_pos_x * factor_rot_x
-        target_alpha_x = -sign_pos_x * intent_x
+            sign_pos_x = float(np.sign(head_center[0])) if abs_x > 1e-3 else 0.0
+            # Przeciwny zwrot: ruch w prawo (+) wymaga rotacji w lewo (face_normal < 0)
+            opposing_rot_x = -sign_pos_x * face_normal_screen[0]
 
-        # --- 2. INTENCJA PIONOWA (MUREK / DASZEK) ---
-        tilt_strength = smoothstep(TILT_DEADZONE_MM, TILT_MAX_MM, abs_tilt_y)
-        higher_eye_dir = 1.0 if delta_eye_y > 0 else -1.0
-        lower_eye_dir  = -higher_eye_dir
+            if opposing_rot_x > 0.0:
+                # Liniowa zależność od rotacji
+                factor_rot_x = float(np.clip(opposing_rot_x / MAX_ANGLE_SIN, 0.0, 1.0))
+                intent_x_mag = factor_pos_x * factor_rot_x
+                # Ruch w prawo (+) -> prawe oko (+), ruch w lewo (-) -> lewe oko (-)
+                target_alpha_x = sign_pos_x * intent_x_mag
 
-        # Murek: głowa w górze + wzrok w dół + przechył -> wyższe oko
-        factor_pos_top = smoothstep(DEADZONE_Y_MM, MAX_DIST_Y_MM, y_rel)
-        pitch_down = -face_normal_screen[1]
-        factor_rot_top = smoothstep(DEADZONE_ANGLE_SIN, MAX_ANGLE_SIN, pitch_down)
-        intent_top = factor_pos_top * factor_rot_top * tilt_strength
+        # --- 2. INTENCJA PIONOWA Z PRZECHYŁEM ROLL (Pkt 6: Murek / Daszek Y/Roll) ---
+        target_alpha_y = 0.0
+        intent_y_mag = 0.0
+        if self.enable_vertical_intent:
+            y_val = head_center[1]  # punkt odniesienia sztywno na 0.0
+            abs_y = abs(y_val)
+            # Nieliniowa translacja pionowa (taka sama charakterystyka jak X)
+            t_pos_y = float(np.clip(abs_y / MAX_DIST_Y_MM, 0.0, 1.0))
+            factor_pos_y = t_pos_y ** INTENT_POS_Y_EXP
 
-        # Daszek: głowa w dole + przechył -> niższe oko
-        factor_pos_bottom = smoothstep(DEADZONE_Y_MM, MAX_DIST_Y_MM, -y_rel)
-        intent_bottom = factor_pos_bottom * tilt_strength
+            # Liniowy udział przechyłu w osi Z (różnica wysokości oczu)
+            tilt_factor = float(np.clip(abs(delta_eye_y) / TILT_MAX_MM, 0.0, 1.0))
 
-        # --- 3. WYZNACZENIE CELU WAGI ---
-        if intent_top > intent_x and intent_top > intent_bottom and intent_top > 0.02:
-            target_alpha = higher_eye_dir * intent_top
-            mode_str = f"MUREK -> {'PRAWE' if higher_eye_dir > 0 else 'LEWE'} (wyzsze)"
-        elif intent_bottom > intent_x and intent_bottom > intent_top and intent_bottom > 0.02:
-            target_alpha = lower_eye_dir * intent_bottom
-            mode_str = f"DASZEK -> {'PRAWE' if lower_eye_dir > 0 else 'LEWE'} (nizsze)"
-        elif intent_x > 0.02:
+            if tilt_factor > 0.02 and abs_y > 1e-3:
+                sign_y = float(np.sign(y_val))
+                sign_delta = float(np.sign(delta_eye_y))
+                # Znak intencji:
+                # Dół (Y < 0) + Prawe niżej (delta < 0) -> Prawe oko (+)
+                # Dół (Y < 0) + Lewe niżej (delta > 0) -> Lewe oko (-)
+                # Góra (Y > 0) + Prawe wyżej (delta > 0) -> Prawe oko (+)
+                # Góra (Y > 0) + Lewe wyżej (delta < 0) -> Lewe oko (-)
+                intent_y_sign = sign_y * sign_delta
+                intent_y_mag = factor_pos_y * tilt_factor
+                target_alpha_y = intent_y_sign * intent_y_mag
+
+        # --- 3. WYBÓR INTENCJI DOMINUJĄCEJ ---
+        if intent_x_mag >= intent_y_mag and intent_x_mag > 0.02:
             target_alpha = target_alpha_x
-            mode_str = f"ZAULEK -> {'LEWE' if target_alpha_x < 0 else 'PRAWE'}"
+            eye_name = "PRAWE" if target_alpha_x > 0 else "LEWE"
+            mode_str = f"ZAULEK -> {eye_name}"
+        elif intent_y_mag > intent_x_mag and intent_y_mag > 0.02:
+            target_alpha = target_alpha_y
+            eye_name = "PRAWE" if target_alpha_y > 0 else "LEWE"
+            tilt_type = "GORA/WYZEJ" if head_center[1] > 0 else "DOL/NIZSZE"
+            mode_str = f"PION ({tilt_type}) -> {eye_name}"
         else:
             target_alpha = 0.0
             mode_str = "NEUTRALNY (SRODEK)"
@@ -250,7 +285,7 @@ class FaceTracker:
             alpha_smooth=self.alpha_smooth,
             target_alpha=target_alpha,
             mode_str=mode_str,
-            y_rel=y_rel,
+            y_rel=y_val,
             delta_eye_y=delta_eye_y,
             landmarks_2d=[(p[0], p[1]) for p in points_2d],
             iris_2d=iris_points,

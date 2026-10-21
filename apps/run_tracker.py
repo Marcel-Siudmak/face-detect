@@ -36,6 +36,8 @@ def main():
         print(f"[+] Nadawanie UDP aktywne na {udp_info_str}")
 
     print("\n[Sterowanie]")
+    print(" '1' - włącz/wyłącz intencję poziomą (Zaułek: Pkt 4 i 5)")
+    print(" '2' - włącz/wyłącz intencję pionową (Murek/Daszek: Pkt 6)")
     print(" 'c' - kalibracja neutralnej wysokości oczu")
     print(" 'q' / ESC - wyjście z programu\n")
 
@@ -68,6 +70,10 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key in (ord('q'), 27):
                 break
+            elif key == ord('1'):
+                tracker.toggle_horizontal_intent()
+            elif key == ord('2'):
+                tracker.toggle_vertical_intent()
             elif key == ord('c'):
                 tracker.calibrate_neutral_y()
     finally:

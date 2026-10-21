@@ -63,7 +63,8 @@ IRIS_LEFT_ID  = 473
 # ==============================================================================
 # MARTWE STREFY I PROGI CZUŁOŚCI (BIOMECHANIKA WYCHYLENIA)
 # ==============================================================================
-DEADZONE_X_MM = 30.0        # Martwa strefa pozioma od centrum (3 cm)
+INTENT_POS_X_EXP = 3.0       # Wykładnik potęgi translacji poziomej (nieliniowość)
+INTENT_POS_Y_EXP = 2.5       # Wykładnik potęgi translacji pionowej (nieliniowość)
 MAX_DIST_X_MM = 135.0       # Pełna intencja pozioma przy 13.5 cm
 DEADZONE_ANGLE_SIN = 0.12   # ~7 stopni martwej strefy skrętu twarzy
 MAX_ANGLE_SIN = 0.38        # Pełna intencja kątowa przy ~22 stopniach
