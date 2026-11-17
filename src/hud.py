@@ -46,6 +46,9 @@ def draw_hud(
         cv2.circle(img, (cam_x, cam_y), 6, (0, 140, 255), -1)
         cv2.circle(img, (cam_x, cam_y), 8, (0, 220, 255), 2, cv2.LINE_AA)
 
+    fps_col = (80, 255, 80) if pose.fps >= 45.0 else ((0, 220, 255) if pose.fps >= 25.0 else (60, 60, 255))
+    fps_text = f"FPS: {pose.fps:4.1f} ({pose.frame_time_ms:4.1f} ms)"
+
     if not pose.is_valid:
         cv2.putText(
             img,
@@ -57,6 +60,7 @@ def draw_hud(
             2,
             cv2.LINE_AA,
         )
+        cv2.putText(img, fps_text, (30, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.6, fps_col, 2, cv2.LINE_AA)
         return
 
     # Panel boczny
@@ -69,8 +73,29 @@ def draw_hud(
     cv2.rectangle(img, (px, py), (px + panel_w, py + panel_h), (80, 80, 80), 1)
 
 
+    # 1. Pasek intencji (Alpha slider + diagnostyka Gaze/EAR)
+    cv2.putText(img, "TRYB INTENCJI:", (px + 15, py + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 255, 255), 1)
+    cv2.putText(img, pose.mode_str, (px + 15, py + 44), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 200, 255), 2)
+
+    bar_x, bar_y, bar_w = px + 35, py + 72, 300
+    cv2.line(img, (bar_x, bar_y), (bar_x + bar_w, bar_y), (100, 100, 100), 4)
+    cv2.circle(img, (bar_x, bar_y), 5, (255, 200, 0), -1)
+    cv2.circle(img, (bar_x + bar_w // 2, bar_y), 4, (180, 180, 180), -1)
+    cv2.circle(img, (bar_x + bar_w, bar_y), 5, (0, 255, 0), -1)
+
+    slider_pos = int(bar_x + (bar_w // 2) + pose.alpha_smooth * (bar_w // 2))
+    cv2.circle(img, (slider_pos, bar_y), 8, (0, 140, 255), -1)
+    cv2.circle(img, (slider_pos, bar_y), 10, (0, 200, 255), 2)
+
+    cv2.putText(img, "LEWE (L)", (bar_x - 15, bar_y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (255, 200, 0), 1)
+    cv2.putText(img, "SRODEK", (bar_x + bar_w // 2 - 20, bar_y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (180, 180, 180), 1)
+    cv2.putText(img, "PRAWE (R)", (bar_x + bar_w - 25, bar_y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 255, 0), 1)
+
+    t_gaze = f"GazeX: {pose.gaze_x:+.2f} | EAR L:{pose.ear_left:.2f} R:{pose.ear_right:.2f}"
+    cv2.putText(img, t_gaze, (px + 15, py + 110), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 220, 255), 1)
+
     t_diag = f"Y_rel: {pose.y_rel:+4.0f}mm | Tilt: {pose.delta_eye_y:+3.0f}mm | 'c'=kalibracja"
-    cv2.putText(img, t_diag, (px + 15, py + 125), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1)
+    cv2.putText(img, t_diag, (px + 15, py + 130), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1)
 
     # 2. Widok z góry (X - Z)
     cv2.putText(img, "WIDOK Z GORY (X - Z)", (px + 15, py + 155), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
@@ -139,9 +164,10 @@ def draw_hud(
     t_r   = f"Prawe: X:{pose.eye_right[0]:4.0f} Y:{pose.eye_right[1]:4.0f} Z:{pose.eye_right[2]:4.0f}"
     t_l   = f"Lewe : X:{pose.eye_left[0]:4.0f} Y:{pose.eye_left[1]:4.0f} Z:{pose.eye_left[2]:4.0f}"
     t_cam = f"KAMERA: X:{pose.cam_pos[0]:4.0f} Y:{pose.cam_pos[1]:4.0f} Z:{pose.cam_pos[2]:4.0f} (a:{pose.alpha_smooth:+0.2f})"
-    cv2.putText(img, t_r,   (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-    cv2.putText(img, t_l,   (30, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
-    cv2.putText(img, t_cam, (30, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 140, 255), 2)
+    cv2.putText(img, t_r,      (30, 40),  cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    cv2.putText(img, t_l,      (30, 70),  cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
+    cv2.putText(img, t_cam,    (30, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 140, 255), 2)
+    cv2.putText(img, fps_text, (30, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.6, fps_col, 2, cv2.LINE_AA)
 
     if udp_info:
         cv2.putText(

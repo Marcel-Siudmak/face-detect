@@ -1,3 +1,4 @@
+import time
 from typing import List, Optional, Tuple
 import cv2
 import numpy as np
@@ -81,6 +82,7 @@ def build_rubik_mesh(center_pos: np.ndarray, size: float = RUBIK_SIZE) -> List[d
             'center': center_face,
             'base_quad': base_quad,
             'stickers': stickers,
+            'stickers_arr': np.array(stickers, dtype=np.float64),
             'sticker_col': sticker_col,
         })
 
@@ -137,6 +139,28 @@ class VirtualWindowRenderer:
         self.left_cube_mesh   = build_rubik_mesh(CUBE_LEFT_POS)
         self.right_cube_mesh  = build_rubik_mesh(CUBE_RIGHT_POS)
 
+        # Prekalkulacja geometrii siatki stołu (jedno rzutowanie dla wszystkich odcinków)
+        grid_pts = []
+        grid_styles = []
+        for z_grid in np.arange(0.0, -TABLE_DEPTH_MM - 1.0, -50.0):
+            grid_pts.append([-300.0, TABLE_Y, z_grid])
+            grid_pts.append([300.0, TABLE_Y, z_grid])
+            col_line = (120, 130, 145) if abs(z_grid) < 1e-3 else (50, 54, 62)
+            thick = 2 if abs(z_grid) < 1e-3 else 1
+            grid_styles.append((col_line, thick))
+
+        for x_grid in np.arange(-250.0, 251.0, 50.0):
+            grid_pts.append([x_grid, TABLE_Y, 0.0])
+            grid_pts.append([x_grid, TABLE_Y, ROOM_BACK_Z])
+            col_line = (90, 100, 115) if abs(x_grid) < 1e-3 else (64, 68, 76)
+            thick = 2 if abs(x_grid) < 1e-3 else 1
+            grid_styles.append((col_line, thick))
+
+        self.grid_lines_3d = np.array(grid_pts, dtype=np.float64)
+        self.grid_styles = grid_styles
+        self._last_render_t: Optional[float] = None
+        self._fps_smooth: float = 0.0
+
     def project(self, points_3d: np.ndarray, eye_pos: np.ndarray) -> np.ndarray:
         """Rzutuje punkty 3D na piksele okna w oparciu o pozycję oka."""
         return project_off_axis(
@@ -152,8 +176,21 @@ class VirtualWindowRenderer:
         self,
         eye_pos: np.ndarray,
         camera_frame: Optional[np.ndarray] = None,
+        fps: Optional[float] = None,
+        frame_time_ms: Optional[float] = None,
     ) -> np.ndarray:
-        """Renderuje pełną klatkę wirtualnego okna ze sceną 3D, stołem i opcjonalnym PiP."""
+        """Renderuje pełną klatkę wirtualnego okna ze sceną 3D, stołem, licznikiem FPS i opcjonalnym PiP."""
+        now = time.perf_counter()
+        if self._last_render_t is not None:
+            dt_r = max(now - self._last_render_t, 1e-4)
+            inst_fps = 1.0 / dt_r
+            if self._fps_smooth <= 0.0:
+                self._fps_smooth = inst_fps
+            else:
+                self._fps_smooth += (inst_fps - self._fps_smooth) * 0.15
+        self._last_render_t = now
+        display_fps = fps if (fps is not None and fps > 0.0) else self._fps_smooth
+
         canvas = np.zeros((self.win_h, self.win_w, 3), dtype=np.uint8)
         canvas[:] = (35, 38, 44)  # Ciemnografitowe tło pokoju
 
@@ -168,22 +205,12 @@ class VirtualWindowRenderer:
         pts_wall = self.project(wall_pts, eye_pos)
         cv2.fillPoly(canvas, [pts_wall], (28, 30, 35))
 
-        # 2. Siatka stołu
-        # Linie poprzeczne (wzdłuż osi X)
-        for z_grid in np.arange(0.0, -TABLE_DEPTH_MM - 1.0, -50.0):
-            g_line = np.array([[-300.0, TABLE_Y, z_grid], [300.0, TABLE_Y, z_grid]])
-            pts_gl = self.project(g_line, eye_pos)
-            col_line = (120, 130, 145) if abs(z_grid) < 1e-3 else (50, 54, 62)
-            thick = 2 if abs(z_grid) < 1e-3 else 1
-            cv2.line(canvas, tuple(pts_gl[0]), tuple(pts_gl[1]), col_line, thick, cv2.LINE_AA)
-
-        # Linie wzdłuż osi Z
-        for x_grid in np.arange(-250.0, 251.0, 50.0):
-            g_line = np.array([[x_grid, TABLE_Y, 0.0], [x_grid, TABLE_Y, ROOM_BACK_Z]])
-            pts_gl = self.project(g_line, eye_pos)
-            col_line = (90, 100, 115) if abs(x_grid) < 1e-3 else (64, 68, 76)
-            thick = 2 if abs(x_grid) < 1e-3 else 1
-            cv2.line(canvas, tuple(pts_gl[0]), tuple(pts_gl[1]), col_line, thick, cv2.LINE_AA)
+        # 2. Siatka stołu (zwektoryzowane rzutowanie jednym wywołaniem)
+        pts_gl = self.project(self.grid_lines_3d, eye_pos)
+        for idx, (col_line, thick) in enumerate(self.grid_styles):
+            p0 = (int(pts_gl[2 * idx, 0]), int(pts_gl[2 * idx, 1]))
+            p1 = (int(pts_gl[2 * idx + 1, 0]), int(pts_gl[2 * idx + 1, 1]))
+            cv2.line(canvas, p0, p1, col_line, thick, cv2.LINE_AA)
 
         # 3. Zbieranie wszystkich ścian kostek i sortowanie algorytmem malarza
         render_polys = []
@@ -206,7 +233,9 @@ class VirtualWindowRenderer:
                 if np.dot(normal, view_vec) > 0:
                     dist = float(np.linalg.norm(view_vec))
                     proj_base = self.project(face_data['base_quad'], eye_pos)
-                    proj_stickers = [self.project(st, eye_pos) for st in face_data['stickers']]
+                    proj_stickers = list(
+                        self.project(face_data['stickers_arr'].reshape(-1, 3), eye_pos).reshape(9, 4, 2)
+                    )
 
                     if cube_name == "Lewa":
                         for pt in proj_base:
@@ -232,10 +261,9 @@ class VirtualWindowRenderer:
             cv2.fillPoly(canvas, [poly_item['base_poly']], COLOR_BLACK)
             cv2.polylines(canvas, [poly_item['base_poly']], isClosed=True, color=(10, 10, 10), thickness=2, lineType=cv2.LINE_AA)
 
-            # 9 kolorowych naklejek z czarnymi obwódkami
-            for st_poly in poly_item['stickers']:
-                cv2.fillPoly(canvas, [st_poly], poly_item['sticker_col'])
-                cv2.polylines(canvas, [st_poly], isClosed=True, color=(15, 15, 15), thickness=1, lineType=cv2.LINE_AA)
+            # 9 kolorowych naklejek narysowanych jednym wywołaniem fillPoly + polylines
+            cv2.fillPoly(canvas, poly_item['stickers'], poly_item['sticker_col'])
+            cv2.polylines(canvas, poly_item['stickers'], isClosed=True, color=(15, 15, 15), thickness=1, lineType=cv2.LINE_AA)
 
         # 4. Krawędź fizycznego okna (rama monitora)
         cv2.rectangle(canvas, (0, 0), (self.win_w - 1, self.win_h - 1), (180, 180, 180), 3)
@@ -294,6 +322,15 @@ class VirtualWindowRenderer:
             2,
             cv2.LINE_AA,
         )
+
+        # Wskaźnik klatkarzu (FPS) w prawym górnym rogu okna 3D
+        fps_col = (80, 255, 80) if display_fps >= 45.0 else ((0, 220, 255) if display_fps >= 25.0 else (60, 60, 255))
+        fps_text = (
+            f"FPS: {display_fps:4.1f} ({frame_time_ms:4.1f} ms)"
+            if frame_time_ms is not None and frame_time_ms > 0.0
+            else f"FPS: {display_fps:4.1f}"
+        )
+        cv2.putText(canvas, fps_text, (self.win_w - 280, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.65, fps_col, 2, cv2.LINE_AA)
 
         # 6. Miniaturowy podgląd kamery PiP
         if camera_frame is not None:

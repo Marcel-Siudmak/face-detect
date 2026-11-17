@@ -42,6 +42,9 @@ def main():
     default_eye = np.array([0.0, 0.0, 500.0], dtype=np.float64)
 
     print("\n[Sterowanie]")
+    print(" '1' - włącz/wyłącz intencję poziomą (X)")
+    print(" '2' - włącz/wyłącz intencję pionową (Y/Roll)")
+    print(" '3' - włącz/wyłącz warstwę Gaze (źrenice) + Velocity + EAR Wink")
     print(" 'c' - kalibracja neutralnej wysokości oczu")
     print(" 'q' / ESC - wyjście z programu\n")
 
@@ -70,13 +73,24 @@ def main():
                     udp_client.send_pose(is_valid=False)
 
             pip_img = None if args.no_pip else frame
-            canvas = renderer.render(eye_pos=eye_pos, camera_frame=pip_img)
+            canvas = renderer.render(
+                eye_pos=eye_pos,
+                camera_frame=pip_img,
+                fps=pose.fps,
+                frame_time_ms=pose.frame_time_ms,
+            )
 
             cv2.imshow("Virtual Window - Mierzalna Scena 3D (Kostki Rubika)", canvas)
 
             key = cv2.waitKey(1) & 0xFF
             if key in (ord('q'), 27):  # 'q' lub ESC
                 break
+            elif key == ord('1'):
+                tracker.toggle_horizontal_intent()
+            elif key == ord('2'):
+                tracker.toggle_vertical_intent()
+            elif key == ord('3'):
+                tracker.toggle_gaze_intent()
             elif key == ord('c'):
                 tracker.calibrate_neutral_y()
     finally:

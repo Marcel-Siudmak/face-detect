@@ -36,8 +36,9 @@ def main():
         print(f"[+] Nadawanie UDP aktywne na {udp_info_str}")
 
     print("\n[Sterowanie]")
-    print(" '1' - włącz/wyłącz intencję poziomą (Zaułek: Pkt 4 i 5)")
-    print(" '2' - włącz/wyłącz intencję pionową (Murek/Daszek: Pkt 6)")
+    print(" '1' - włącz/wyłącz intencję poziomą (X)")
+    print(" '2' - włącz/wyłącz intencję pionową (Y/Roll)")
+    print(" '3' - włącz/wyłącz warstwę Gaze (źrenice) + Velocity + EAR Wink")
     print(" 'c' - kalibracja neutralnej wysokości oczu")
     print(" 'q' / ESC - wyjście z programu\n")
 
@@ -74,6 +75,8 @@ def main():
                 tracker.toggle_horizontal_intent()
             elif key == ord('2'):
                 tracker.toggle_vertical_intent()
+            elif key == ord('3'):
+                tracker.toggle_gaze_intent()
             elif key == ord('c'):
                 tracker.calibrate_neutral_y()
     finally:

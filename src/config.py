@@ -26,6 +26,10 @@ WIN_H = 800
 CAMERA_WIDTH = 1280
 CAMERA_HEIGHT = 720
 
+# Rozdzielczość wejściowa dla detektora MediaPipe (przyspieszenie CPU bez utraty precyzji)
+MP_DETECT_WIDTH = 640
+MP_DETECT_HEIGHT = 360
+
 CAMERA_INTRINSIC_K = np.array([
     [1140.0,    0.0, 640.0],
     [   0.0, 1140.0, 360.0],
@@ -60,25 +64,44 @@ EYE_LEFT_HEAD  = np.array([ 31.5, 3.0, 8.0])  # viewer's right
 IRIS_RIGHT_ID = 468
 IRIS_LEFT_ID  = 473
 
-# ==============================================================================
-# MARTWE STREFY I PROGI CZUŁOŚCI (BIOMECHANIKA WYCHYLENIA)
-# ==============================================================================
-INTENT_POS_X_EXP = 3.0       # Wykładnik potęgi translacji poziomej (nieliniowość)
-INTENT_POS_Y_EXP = 2.5       # Wykładnik potęgi translacji pionowej (nieliniowość)
-MAX_DIST_X_MM = 135.0       # Pełna intencja pozioma przy 13.5 cm
-DEADZONE_ANGLE_SIN = 0.12   # ~7 stopni martwej strefy skrętu twarzy
-MAX_ANGLE_SIN = 0.38        # Pełna intencja kątowa przy ~22 stopniach
+EYE_R_OUTER_ID = 33
+EYE_R_INNER_ID = 133
+EYE_R_UPPER_ID = 159
+EYE_R_LOWER_ID = 145
 
-DEADZONE_Y_MM = 25.0        # Martwa strefa pionowa (2.5 cm)
-MAX_DIST_Y_MM = 90.0        # Pełna intencja pionowa przy 9 cm
-TILT_DEADZONE_MM = 8.0      # Martwa strefa przechyłu oczu w pionie
-TILT_MAX_MM = 22.0          # Maksymalny przechył do wyboru oka
+EYE_L_INNER_ID = 362
+EYE_L_OUTER_ID = 263
+EYE_L_UPPER_ID = 386
+EYE_L_LOWER_ID = 374
 
 # ==============================================================================
-# STAŁE FILTRACJI CZASOWEJ (TŁUMIENIE DRGAŃ I PŁYWANIE)
+# PARAMETRY HYBRYDOWEGO SYSTEMU INTENCJI (360° VECTOR + GAZE + EAR WINK)
 # ==============================================================================
-ALPHA_SMOOTH_RATE = 4.5     # Szybkość przepływu wagi kamery (mniejsza = bardziej leniwe pływanie)
-POS_SMOOTH_RATE   = 14.0    # Szybkość wygładzania drgań pozycji 3D z PnP
+PEEK_DEADZONE_MM = 6.0          # Martwa strefa centralna (mm)
+PEEK_FULL_DIST_MM = 52.0        # Dystans pełnego przejścia na oko wiodące (mm)
+PEEK_CURVE_EXP = 1.15           # Wykładnik krzywej smoothstep
+VERTICAL_TILT_GAIN = 2.2        # Wzmocnienie osi pionowej Y przy przechyle głowy (Roll)
+
+GAZE_EYE_WEIGHT = 0.65          # Waga wychylenia źrenic względem kąta Yaw głowy
+GAZE_CONVERGENCE_BOOST = 0.45   # Wzmocnienie intencji, gdy wzrok kontruje wychylenie
+GAZE_DIRECT_PEEK_GAIN = 0.30    # Bezpośredni wkład spojrzenia przy małym wychyleniu
+LOOK_AWAY_THRESHOLD = 0.22      # Próg wygaszania, gdy głowa i wzrok uciekają poza ekran
+
+VELOCITY_LEAD_GAIN = 0.0030     # Wyprzedzenie prędkościowe (s / mm)
+VELOCITY_SMOOTH_RATE = 12.0     # Filtr dolnoprzepustowy pochodnej prędkości
+
+EAR_SQUINT_THRESHOLD = 0.165    # Próg przymknięcia powieki (EAR)
+EAR_ASYMMETRY_MIN = 0.055       # Minimalna różnica EAR między oczami dla trybu Wink
+
+# ==============================================================================
+# STAŁE FILTRACJI CZASOWEJ (ASYMETRYCZNE PŁYWANIE I TŁUMIENIE DRGAŃ)
+# ==============================================================================
+ALPHA_ATTACK_RATE  = 16.0       # Błyskawiczna reakcja przy wychylaniu i ruchu głowy
+ALPHA_RELEASE_RATE = 6.5        # Płynne podtrzymanie przy nieruchomej głowie
+ALPHA_CENTER_RATE  = 12.0       # Szybki powrót do środka w strefie neutralnej
+ALPHA_SMOOTH_RATE  = 12.0       # Kompatybilność wsteczna
+POS_SMOOTH_RATE    = 14.0       # Bazowe wygładzanie drgań PnP w spoczynku
+POS_FAST_RATE      = 36.0       # Szybkie śledzenie pozycji 3D podczas ruchu głowy
 
 # ==============================================================================
 # PARAMETRY SCENY 3D (KOSTKI RUBIKA I STÓŁ)
