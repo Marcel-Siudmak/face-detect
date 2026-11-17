@@ -19,7 +19,10 @@ from src.config import (
     CAMERA_TO_SCREEN_CENTER_Y_MM,
     CAMERA_WIDTH,
     DEFAULT_MODEL_PATH,
-    EAR_ASYMMETRY_MIN,
+    EAR_CLOSED_FULL,
+    EAR_OPEN_REF,
+    EAR_REL_DROP_FULL,
+    EAR_REL_DROP_MIN,
     EAR_SQUINT_THRESHOLD,
     EYE_L_INNER_ID,
     EYE_L_LOWER_ID,
@@ -41,7 +44,7 @@ from src.config import (
     MODEL_3D,
     MP_DETECT_HEIGHT,
     MP_DETECT_WIDTH,
-    PEEK_CURVE_EXP,
+    PEEK_CONVEX_EXP,
     PEEK_DEADZONE_MM,
     PEEK_FULL_DIST_MM,
     POS_FAST_RATE,
@@ -62,6 +65,8 @@ def smoothstep(edge0: float, edge1: float, x: float) -> float:
 
 def compute_eye_gaze_and_ear(
     face_pts_2d: Dict[int, Tuple[float, float]],
+    ear_base_left: float = EAR_OPEN_REF,
+    ear_base_right: float = EAR_OPEN_REF,
 ) -> Tuple[float, float, float, float, float]:
     """Oblicza znormalizowany kierunek spojrzenia źrenic (gaze_x, gaze_y),
     współczynniki otwarcia oczu (ear_left, ear_right) oraz wagę przymrużenia (wink_alpha).
@@ -138,14 +143,20 @@ def compute_eye_gaze_and_ear(
     ear_right = height_r / (width_r + 1e-6)
     ear_left = height_l / (width_l + 1e-6)
 
-    # Detekcja asymetrycznego przymrużenia (mrugnięcie obu oczu ma ~0 asymetrii)
-    squint_l = smoothstep(EAR_SQUINT_THRESHOLD, EAR_SQUINT_THRESHOLD * 0.55, ear_left) * smoothstep(
-        EAR_ASYMMETRY_MIN, EAR_ASYMMETRY_MIN * 1.8, ear_right - ear_left
-    )
-    squint_r = smoothstep(EAR_SQUINT_THRESHOLD, EAR_SQUINT_THRESHOLD * 0.55, ear_right) * smoothstep(
-        EAR_ASYMMETRY_MIN, EAR_ASYMMETRY_MIN * 1.8, ear_left - ear_right
-    )
-    wink_alpha = float(np.clip(squint_l - squint_r, -1.0, 1.0))
+    # Normalizacja względem bazowego otwarcia każdego oka
+    norm_ear_l = ear_left * (EAR_OPEN_REF / max(ear_base_left, 0.18))
+    norm_ear_r = ear_right * (EAR_OPEN_REF / max(ear_base_right, 0.18))
+
+    # Założenie: przynajmniej jedno oko jest otwarte (bardziej otwarte = oko odniesienia)
+    ear_open = max(norm_ear_l, norm_ear_r)
+    ear_closed = min(norm_ear_l, norm_ear_r)
+
+    p_closed = smoothstep(EAR_SQUINT_THRESHOLD, EAR_CLOSED_FULL, ear_closed)
+    rel_drop = (ear_open - ear_closed) / max(ear_open, 1e-6)
+    p_asym = smoothstep(EAR_REL_DROP_MIN, EAR_REL_DROP_FULL, rel_drop)
+
+    wink_dir = 1.0 if norm_ear_l < norm_ear_r else -1.0
+    wink_alpha = float(np.clip(wink_dir * p_closed * p_asym, -1.0, 1.0))
 
     return gaze_x, gaze_y, ear_left, ear_right, wink_alpha
 
@@ -164,6 +175,8 @@ def compute_hybrid_intent(
     enable_horizontal_intent: bool = True,
     enable_vertical_intent: bool = True,
     enable_gaze_intent: bool = True,
+    ear_left: float = 0.3,
+    ear_right: float = 0.3,
 ) -> Dict[str, Union[float, str]]:
     """Hybrydowy model intencji wyboru oka (360° Vector + True Gaze + Velocity Lead + EAR Wink)."""
     x_rel = float(head_center[0] - x_neutral_mm) if enable_horizontal_intent else 0.0
@@ -179,13 +192,23 @@ def compute_hybrid_intent(
     else:
         u_eyes = np.array([1.0, 0.0], dtype=np.float64)
 
-    # Zunifikowany rzut wektora wychylenia na oś oczu (360°)
-    s_eff = float(x_rel * u_eyes[0] + (VERTICAL_TILT_GAIN * y_rel) * u_eyes[1])
+    # Ciągła, bezskokowa fuzja składowej poziomej (X) oraz pionowej (Y/Roll)
+    s_x = float(x_rel)
+    y_active = float(np.sign(y_rel) * max(0.0, abs(y_rel) - 28.0))
+    s_y_raw = float(VERTICAL_TILT_GAIN * y_active * u_eyes[1])
+
+    center_x_window = 1.0 - smoothstep(0.0, 12.0, abs(s_x))
+    slow_vx_window = 1.0 - smoothstep(10.0, 30.0, abs(vel_proj_mm_s))
+    s_y_eff = s_y_raw * center_x_window * slow_vx_window
+    s_eff = float(s_x + s_y_eff)
+
     abs_s = abs(s_eff)
     sign_s = float(np.sign(s_eff)) if abs_s > 1e-3 else 0.0
 
-    # Warstwa 1: Krzywa bazowa 360°
-    base_mag = float(smoothstep(PEEK_DEADZONE_MM, PEEK_FULL_DIST_MM, abs_s) ** PEEK_CURVE_EXP)
+    # Warstwa 1: Dominacja paralaksy obuocznej (wypukła krzywa z miękkim startem przy 2.5 mm)
+    t_dom = float(np.clip((abs_s - PEEK_DEADZONE_MM) / max(PEEK_FULL_DIST_MM - PEEK_DEADZONE_MM, 1e-6), 0.0, 1.0))
+    soft_start = smoothstep(0.0, 0.15, t_dom)
+    base_mag = float((1.0 - (1.0 - t_dom) ** PEEK_CONVEX_EXP) * soft_start)
     vec_alpha = sign_s * base_mag
 
     # Warstwa 2 i 3: Fuzja spojrzenia (True Gaze + VOR) i wyprzedzenie prędkościowe
@@ -198,15 +221,16 @@ def compute_hybrid_intent(
         combined_gaze_x = float(face_normal_screen[0] + GAZE_EYE_WEIGHT * gaze_x)
         if abs_s > 2.0:
             opposing_gaze = -sign_s * combined_gaze_x
-            if opposing_gaze > 0.0:
+            opposing_eff = max(0.0, opposing_gaze - 0.06)
+            if opposing_eff > 0.0:
                 conv_boost = (
                     GAZE_CONVERGENCE_BOOST
-                    * float(np.clip(opposing_gaze / 0.30, 0.0, 1.0))
+                    * float(np.clip(opposing_eff / 0.30, 0.0, 1.0))
                     * smoothstep(2.0, PEEK_FULL_DIST_MM * 0.6, abs_s)
                 )
                 direct_gaze_mag = (
                     GAZE_DIRECT_PEEK_GAIN
-                    * float(np.clip(opposing_gaze / 0.35, 0.0, 1.0))
+                    * float(np.clip(opposing_eff / 0.35, 0.0, 1.0))
                     * smoothstep(2.0, PEEK_DEADZONE_MM * 2.5, abs_s)
                 )
             look_away_gate = 1.0 - smoothstep(
@@ -214,12 +238,18 @@ def compute_hybrid_intent(
             )
 
         vel_gate = smoothstep(PEEK_DEADZONE_MM * 0.5, PEEK_DEADZONE_MM * 1.5, abs_s)
-        vel_term = float(np.clip(VELOCITY_LEAD_GAIN * vel_proj_mm_s, -0.35, 0.35)) * vel_gate
+        raw_vel_term = float(np.clip(VELOCITY_LEAD_GAIN * vel_proj_mm_s, -0.35, 0.35)) * vel_gate
+        if sign_s != 0.0 and raw_vel_term * sign_s < 0.0:
+            vel_term = 0.0
+        else:
+            vel_term = raw_vel_term
 
-    combined_mag = float(np.clip(base_mag + conv_boost + direct_gaze_mag, 0.0, 1.0))
-    target_alpha = float(np.clip((sign_s * combined_mag + vel_term) * look_away_gate, -1.0, 1.0))
+    # look_away_gate tłumi wyłącznie dodatkowy boost ze spojrzenia, nigdy bazowej geometrii
+    gaze_addition = (conv_boost + direct_gaze_mag) * look_away_gate
+    combined_mag = float(np.clip(base_mag + gaze_addition, 0.0, 1.0))
+    target_alpha = float(np.clip(sign_s * combined_mag + vel_term, -1.0, 1.0))
 
-    # Warstwa 4: Nadpisanie przez przymrużenie oka (EAR Wink Override)
+    # Warstwa 4: Nadpisanie przez przymrużenie/zamknięcie jednego oka (EAR Wink Override)
     wink_active = enable_gaze_intent and abs(wink_alpha) > 0.05
     if wink_active:
         wink_strength = min(abs(wink_alpha), 1.0)
@@ -231,12 +261,12 @@ def compute_hybrid_intent(
         mode_str = f"WINK -> {eye_name}"
     elif abs(target_alpha) > 0.02:
         eye_name = "PRAWE" if target_alpha > 0 else "LEWE"
-        horiz_part = abs(x_rel * u_eyes[0])
-        vert_part = abs((VERTICAL_TILT_GAIN * y_rel) * u_eyes[1])
+        horiz_part = abs(s_x)
+        vert_part = abs(s_y_eff)
         if vert_part > horiz_part * 1.25:
             tilt_type = "GORA" if y_rel > 0 else "DOL"
             mode_str = f"PION/ROLL ({tilt_type}) -> {eye_name}"
-        elif enable_gaze_intent and (conv_boost + direct_gaze_mag) > 0.03:
+        elif enable_gaze_intent and gaze_addition > 0.03:
             mode_str = f"WEKTOR+GAZE -> {eye_name}"
         else:
             mode_str = f"WEKTOR 360 -> {eye_name}"
@@ -248,7 +278,7 @@ def compute_hybrid_intent(
         "mode_str": mode_str,
         "s_eff": s_eff,
         "vec_alpha": vec_alpha,
-        "gaze_boost": conv_boost + direct_gaze_mag,
+        "gaze_boost": gaze_addition,
         "x_rel": x_rel,
         "y_rel": y_rel,
     }
@@ -322,18 +352,46 @@ class FaceTracker:
         self.alpha_smooth: float = 0.0
         self.x_neutral_mm: float = 0.0
         self.y_neutral_mm: float = 0.0
+        self.neutral_y_initialized: bool = False
         self.prev_time: Optional[float] = None
         self.last_timestamp_ms: int = 0
-        self.prev_s_eff: Optional[float] = None
+        self.prev_x_rel: Optional[float] = None
         self.vel_proj_smooth: float = 0.0
         self.last_head_center: Optional[np.ndarray] = None
+        self.ear_base_left: float = EAR_OPEN_REF
+        self.ear_base_right: float = EAR_OPEN_REF
+        self.last_ear_left: Optional[float] = None
+        self.last_ear_right: Optional[float] = None
         self.fps_smooth: float = 0.0
         self.frame_time_ms: float = 0.0
+
+        # Logowanie diagnostyczne CSV
+        self.logging_enabled: bool = False
+        self.log_file_path: Path = Path("intent_debug_log.csv")
+        self._log_file = None
 
         # Flagi diagnostyczne warstw intencji
         self.enable_horizontal_intent: bool = True  # Oś pozioma X
         self.enable_vertical_intent: bool = True    # Oś pionowa Y + przechył Roll
         self.enable_gaze_intent: bool = True        # Gaze (źrenice) + Velocity Lead + EAR Wink
+
+    def toggle_logging(self) -> bool:
+        """Włącza lub wyłącza zapis klatek diagnostycznych do pliku CSV."""
+        self.logging_enabled = not self.logging_enabled
+        if self.logging_enabled:
+            self._log_file = open(self.log_file_path, "w", encoding="utf-8")
+            self._log_file.write(
+                "timestamp_ms,x_rel,y_rel,z_mm,roll_deg,yaw_deg,pitch_deg,"
+                "gaze_x,ear_l,ear_r,wink_alpha,s_eff,target_alpha,alpha_smooth,cam_x,mode\n"
+            )
+            self._log_file.flush()
+            print(f"[*] Logowanie diagnostyczne WŁĄCZONE -> {self.log_file_path}")
+        else:
+            if self._log_file is not None:
+                self._log_file.close()
+                self._log_file = None
+            print("[*] Logowanie diagnostyczne WYŁĄCZONE")
+        return self.logging_enabled
 
     def toggle_horizontal_intent(self) -> bool:
         """Przełącza udział wychylenia poziomego w modelu wektorowym."""
@@ -357,10 +415,22 @@ class FaceTracker:
         return self.enable_gaze_intent
 
     def calibrate_neutral_y(self) -> None:
-        """Ustawia aktualną wysokość głowy jako poziom neutralny."""
+        """Ustawia aktualną pozycję głowy (X, Y) oraz otwarcie oczu jako punkt neutralny."""
         if self.last_head_center is not None:
+            self.x_neutral_mm = float(self.last_head_center[0])
             self.y_neutral_mm = float(self.last_head_center[1])
-            print(f"[*] Skalibrowano neutralne Y: {self.y_neutral_mm:.1f} mm")
+            if (
+                self.last_ear_left is not None
+                and self.last_ear_right is not None
+                and self.last_ear_left > 0.22
+                and self.last_ear_right > 0.22
+            ):
+                self.ear_base_left = float(self.last_ear_left)
+                self.ear_base_right = float(self.last_ear_right)
+            print(
+                f"[*] Skalibrowano pozycję neutralną: X={self.x_neutral_mm:+.1f} mm, "
+                f"Y={self.y_neutral_mm:+.1f} mm | EAR L={self.ear_base_left:.2f} R={self.ear_base_right:.2f}"
+            )
 
     def process_frame(
         self,
@@ -477,33 +547,37 @@ class FaceTracker:
         ])
 
         head_center = (eye_l_screen + eye_r_screen) * 0.5
+        if not self.neutral_y_initialized:
+            self.y_neutral_mm = float(head_center[1])
+            self.neutral_y_initialized = True
         self.last_head_center = head_center.copy()
         eye_base_3d = eye_r_screen - eye_l_screen
 
         cam_forward = -R[:, 2]
-        face_normal_screen = np.array([-cam_forward[0], -cam_forward[1], cam_forward[2]])
+        face_normal_screen = np.array([-cam_forward[0], -cam_forward[1], abs(cam_forward[2])])
 
         delta_eye_y = float(eye_r_screen[1] - eye_l_screen[1])
 
         # --- 1. EKSTRAKCJA GAZE (ŹRENICE) I EAR (OTWARCIE POWIEK) ---
-        gaze_x, gaze_y, ear_left, ear_right, wink_alpha = compute_eye_gaze_and_ear(face_pts_2d)
-
-        # --- 2. ESTYMACJA PRĘDKOŚCI WZDŁUŻ OSI OCZU (VELOCITY LEAD) ---
-        eye_vec_xy = np.array(
-            [eye_r_screen[0] - eye_l_screen[0], eye_r_screen[1] - eye_l_screen[1]],
-            dtype=np.float64,
+        gaze_x, gaze_y, ear_left, ear_right, wink_alpha = compute_eye_gaze_and_ear(
+            face_pts_2d,
+            ear_base_left=self.ear_base_left,
+            ear_base_right=self.ear_base_right,
         )
-        eye_norm_xy = float(np.linalg.norm(eye_vec_xy))
-        u_eyes = eye_vec_xy / eye_norm_xy if eye_norm_xy > 1e-6 else np.array([1.0, 0.0], dtype=np.float64)
-        x_rel_raw = float(head_center[0] - self.x_neutral_mm) if self.enable_horizontal_intent else 0.0
-        y_rel_raw = float(head_center[1] - self.y_neutral_mm) if self.enable_vertical_intent else 0.0
-        s_eff_curr = float(x_rel_raw * u_eyes[0] + (VERTICAL_TILT_GAIN * y_rel_raw) * u_eyes[1])
+        self.last_ear_left = ear_left
+        self.last_ear_right = ear_right
+        if ear_left > 0.25 and ear_right > 0.25 and abs(ear_left - ear_right) < 0.10:
+            ear_blend = 1.0 - np.exp(-1.5 * dt)
+            self.ear_base_left += (ear_left - self.ear_base_left) * ear_blend
+            self.ear_base_right += (ear_right - self.ear_base_right) * ear_blend
 
-        if self.prev_s_eff is not None:
-            raw_vel = (s_eff_curr - self.prev_s_eff) / dt
+        # --- 2. ESTYMACJA PRĘDKOŚCI POZIOMEJ GŁOWY (VELOCITY LEAD) ---
+        x_rel_raw = float(head_center[0] - self.x_neutral_mm) if self.enable_horizontal_intent else 0.0
+        if self.prev_x_rel is not None:
+            raw_vel = (x_rel_raw - self.prev_x_rel) / dt
             vel_blend = 1.0 - np.exp(-VELOCITY_SMOOTH_RATE * dt)
             self.vel_proj_smooth += (raw_vel - self.vel_proj_smooth) * vel_blend
-        self.prev_s_eff = s_eff_curr
+        self.prev_x_rel = x_rel_raw
 
         # --- 3. HYBRYDOWY SYSTEM INTENCJI ---
         intent = compute_hybrid_intent(
@@ -520,6 +594,8 @@ class FaceTracker:
             enable_horizontal_intent=self.enable_horizontal_intent,
             enable_vertical_intent=self.enable_vertical_intent,
             enable_gaze_intent=self.enable_gaze_intent,
+            ear_left=ear_left,
+            ear_right=ear_right,
         )
         target_alpha = float(intent["target_alpha"])
         mode_str = str(intent["mode_str"])
@@ -562,6 +638,14 @@ class FaceTracker:
         yaw_deg = float(np.degrees(np.arctan2(face_normal_screen[0], face_normal_screen[2])))
         pitch_deg = float(np.degrees(np.arctan2(face_normal_screen[1], face_normal_screen[2])))
 
+        if self.logging_enabled and self._log_file is not None:
+            self._log_file.write(
+                f"{timestamp_ms},{x_rel:.2f},{y_rel:.2f},{head_center[2]:.2f},"
+                f"{roll_deg:.2f},{yaw_deg:.2f},{pitch_deg:.2f},"
+                f"{gaze_x:.3f},{ear_left:.3f},{ear_right:.3f},{wink_alpha:.3f},"
+                f"{s_eff:.2f},{target_alpha:.4f},{self.alpha_smooth:.4f},{cam_pos[0]:.2f},{mode_str}\n"
+            )
+
         self.frame_time_ms = (time.perf_counter() - t_start) * 1000.0
 
         return PoseResult(
@@ -593,7 +677,13 @@ class FaceTracker:
         )
 
     def close(self) -> None:
-        """Zwalnia zasoby detektora MediaPipe."""
+        """Zwalnia zasoby detektora MediaPipe oraz zamyka plik logów."""
+        if self._log_file is not None:
+            try:
+                self._log_file.close()
+            except Exception:
+                pass
+            self._log_file = None
         try:
             self.detector.close()
         except Exception:

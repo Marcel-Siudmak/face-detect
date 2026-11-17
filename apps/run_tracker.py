@@ -39,7 +39,8 @@ def main():
     print(" '1' - włącz/wyłącz intencję poziomą (X)")
     print(" '2' - włącz/wyłącz intencję pionową (Y/Roll)")
     print(" '3' - włącz/wyłącz warstwę Gaze (źrenice) + Velocity + EAR Wink")
-    print(" 'c' - kalibracja neutralnej wysokości oczu")
+    print(" 'c' - kalibracja neutralnej pozycji głowy (X, Y)")
+    print(" 'l' - włącz/wyłącz zapis logów diagnostycznych do intent_debug_log.csv")
     print(" 'q' / ESC - wyjście z programu\n")
 
     try:
@@ -79,6 +80,8 @@ def main():
                 tracker.toggle_gaze_intent()
             elif key == ord('c'):
                 tracker.calibrate_neutral_y()
+            elif key == ord('l'):
+                tracker.toggle_logging()
     finally:
         if udp_client is not None:
             udp_client.close()

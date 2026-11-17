@@ -77,9 +77,10 @@ EYE_L_LOWER_ID = 374
 # ==============================================================================
 # PARAMETRY HYBRYDOWEGO SYSTEMU INTENCJI (360° VECTOR + GAZE + EAR WINK)
 # ==============================================================================
-PEEK_DEADZONE_MM = 6.0          # Martwa strefa centralna (mm)
-PEEK_FULL_DIST_MM = 52.0        # Dystans pełnego przejścia na oko wiodące (mm)
-PEEK_CURVE_EXP = 1.15           # Wykładnik krzywej smoothstep
+PEEK_DEADZONE_MM = 2.5          # Mikro-strefa symetrii obuocznej w centrum (mm)
+PEEK_FULL_DIST_MM = 24.0        # Pełne przejęcie przez oko wiodące poniżej IPD/2 (31.5 mm)
+PEEK_CONVEX_EXP = 2.3           # Wykładnik wypukłej krzywej dominacji: 1 - (1 - t)^exp
+PEEK_CURVE_EXP = 2.3            # Alias kompatybilności
 VERTICAL_TILT_GAIN = 2.2        # Wzmocnienie osi pionowej Y przy przechyle głowy (Roll)
 
 GAZE_EYE_WEIGHT = 0.65          # Waga wychylenia źrenic względem kąta Yaw głowy
@@ -90,13 +91,17 @@ LOOK_AWAY_THRESHOLD = 0.22      # Próg wygaszania, gdy głowa i wzrok uciekają
 VELOCITY_LEAD_GAIN = 0.0030     # Wyprzedzenie prędkościowe (s / mm)
 VELOCITY_SMOOTH_RATE = 12.0     # Filtr dolnoprzepustowy pochodnej prędkości
 
-EAR_SQUINT_THRESHOLD = 0.165    # Próg przymknięcia powieki (EAR)
-EAR_ASYMMETRY_MIN = 0.055       # Minimalna różnica EAR między oczami dla trybu Wink
+EAR_OPEN_REF = 0.34             # Referencyjne EAR otwartego oka
+EAR_SQUINT_THRESHOLD = 0.265    # Próg początku przymykania oka (po normalizacji bazowej)
+EAR_CLOSED_FULL = 0.175         # Poziom pełnego uznania oka za zamknięte
+EAR_REL_DROP_MIN = 0.14         # Minimalna względna różnica otwarcia między oczami (14%)
+EAR_REL_DROP_FULL = 0.26        # Pełna względna asymetria (26% mniej otwarte niż drugie oko)
+EAR_ASYMMETRY_MIN = 0.040       # Kompatybilność wsteczna
 
 # ==============================================================================
 # STAŁE FILTRACJI CZASOWEJ (ASYMETRYCZNE PŁYWANIE I TŁUMIENIE DRGAŃ)
 # ==============================================================================
-ALPHA_ATTACK_RATE  = 16.0       # Błyskawiczna reakcja przy wychylaniu i ruchu głowy
+ALPHA_ATTACK_RATE  = 13.5       # Szybka i płynna reakcja przy wychylaniu i ruchu głowy
 ALPHA_RELEASE_RATE = 6.5        # Płynne podtrzymanie przy nieruchomej głowie
 ALPHA_CENTER_RATE  = 12.0       # Szybki powrót do środka w strefie neutralnej
 ALPHA_SMOOTH_RATE  = 12.0       # Kompatybilność wsteczna

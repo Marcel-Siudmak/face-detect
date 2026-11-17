@@ -94,8 +94,8 @@ def draw_hud(
     t_gaze = f"GazeX: {pose.gaze_x:+.2f} | EAR L:{pose.ear_left:.2f} R:{pose.ear_right:.2f}"
     cv2.putText(img, t_gaze, (px + 15, py + 110), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 220, 255), 1)
 
-    t_diag = f"Y_rel: {pose.y_rel:+4.0f}mm | Tilt: {pose.delta_eye_y:+3.0f}mm | 'c'=kalibracja"
-    cv2.putText(img, t_diag, (px + 15, py + 130), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1)
+    t_diag = f"X_rel:{pose.x_rel:+4.0f} Y_rel:{pose.y_rel:+4.0f}mm | Tilt:{pose.delta_eye_y:+3.0f}mm | 'c'=kalib."
+    cv2.putText(img, t_diag, (px + 15, py + 130), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (200, 200, 200), 1)
 
     # 2. Widok z góry (X - Z)
     cv2.putText(img, "WIDOK Z GORY (X - Z)", (px + 15, py + 155), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
